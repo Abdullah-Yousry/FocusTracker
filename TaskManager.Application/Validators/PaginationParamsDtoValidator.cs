@@ -17,9 +17,8 @@ namespace TaskManager.Application.Validators
                 .WithMessage("PageNumber must be at least 1.");
 
             RuleFor(x => x.PageSize)
-                .GreaterThan(0)
-                .LessThanOrEqualTo(20)
-                .WithMessage("PageSize cannot exceed 20 items per page.");
+                .InclusiveBetween(1, 20)
+                .WithMessage("PageSize must be between 1 and 100.");
         }
     }
 }

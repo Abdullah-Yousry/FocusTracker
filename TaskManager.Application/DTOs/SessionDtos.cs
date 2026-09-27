@@ -51,13 +51,6 @@ namespace TaskManager.Application.DTOs
         public PaginationParamsDto Pagination { get; set; } = new();
     }
 
-    public class DaySummaryDto
-    {
-        public DateTime Date { get; set; }
-        public int TotalMinutes { get; set; }
-        public List<SessionResponseDto> Sessions { get; set; } = new();
-    }
-
     public class UpdateSessionDto
     {
         public string Title { get; set; } = string.Empty;
