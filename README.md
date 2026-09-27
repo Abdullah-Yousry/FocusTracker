@@ -1,17 +1,18 @@
 # FocusTracker API
 
-An ASP.NET Core Web API built with .NET 8 and Entity Framework Core for tracking focus sessions and productivity. The system enforces session lifecycle rules, automatic pause-limit expiration, and daily analytics, following Clean Architecture with a strict separation between the Domain, Application, Infrastructure, and Api layers.
+An ASP.NET Core Web API built with .NET 8 and Entity Framework Core for tracking focus sessions and productivity. The system enforces session lifecycle rules, automatic pause-limit expiration, and date-range analytics, following Clean Architecture with a strict separation between the Domain, Application, Infrastructure, and Api layers.
 
 ---
 
 ## Key Features & Business Rules
 
 - **Session Lifecycle Management** — sessions move through a controlled state machine: `Pending → Running → Paused → Finished`.
-- **Automated Extended-Pause Enforcement** — if a session's accumulated pause time exceeds its configured `MaxAllowedPauseInMinutes`, it is automatically transitioned to `Finished`, both lazily (on access) and in bulk (on listing/summary queries) using `EF.Functions.DateDiffMinute` inside a single `ExecuteUpdateAsync` call, so the calculation happens at the database level rather than in application memory.
+- **Automated Extended-Pause Enforcement** — if a session's accumulated pause time exceeds its configured `MaxAllowedPauseInMinutes` (set per session at creation, defaulting to 60 minutes), it is automatically transitioned to `Finished`, both lazily (on access) and in bulk (on listing/summary queries) using `EF.Functions.DateDiffMinute` inside a single `ExecuteUpdateAsync` call, so the calculation happens at the database level rather than in application memory.
 - **Accurate Focus-Time Calculation** — focus time is computed dynamically for running sessions (elapsed time since the last state change is added on read) so reported totals never drift, even for sessions that are still in progress.
-- **Daily Summary & Analytics** — aggregates total focus minutes and session activity for a given date, applying the same auto-finish evaluation before summarizing.
+- **Date-Range Summary & Analytics** — aggregates total focus minutes, total sessions, and finished-session counts across any `[fromDate, toDate]` range, alongside a per-category breakdown (minutes and session count per category), plus a paginated list of the underlying sessions within that range. Running sessions are included using their live elapsed time, and the same expired-pause auto-finish check runs against the range before aggregating, so figures are never stale.
 - **JWT Authentication with Refresh Tokens** — access + refresh token issuance, strongly-typed `JwtOptions`, and a startup guard that rejects any signing key shorter than 32 bytes (256 bits).
 - **Scoped Multi-Tenancy** — categories and sessions are always filtered by the authenticated user's id at the query level; there is no cross-user data access.
+- **Category Name Normalization & Uniqueness** — category names are trimmed, have internal whitespace collapsed to single spaces, and are lowercased before persistence; a duplicate name for the same user is rejected.
 - **Centralized Request Validation** — all incoming DTOs are validated through FluentValidation, executed automatically via a custom `IAsyncActionFilter`.
 - **Global Exception Handling** — a single middleware maps domain/validation exceptions to consistent JSON error responses with the correct HTTP status codes.
 - **Rate Limiting** — a stricter fixed-window policy on authentication endpoints and a per-user (or per-IP) policy on the rest of the API.
@@ -36,9 +37,10 @@ Dependency direction: `Api → Infrastructure → Application → Domain`.
 
 ## Performance & Database Optimizations
 
-1. **`AsNoTracking` read operations** — applied to all read-only query paths (`GetUserSessionsAsync`, `GetDaySummaryAsync`) to remove EF Core change-tracking overhead on responses that are never persisted back.
+1. **`AsNoTracking` read operations** — applied to all read-only query paths (`GetUserCategoriesAsync`, `GetUserSessionsAsync`, `GetDynamicDateRangeSummaryAsync`) to remove EF Core change-tracking overhead on responses that are never persisted back.
 2. **`ExecuteUpdateAsync` batch updates** — the auto-finish check for expired paused sessions runs as a single `UPDATE` statement evaluated entirely by the database engine (via `EF.Functions.DateDiffMinute`), rather than loading entities into memory, mutating them, and calling `SaveChangesAsync`. This avoids N+1 patterns and keeps the operation O(1) round trips regardless of how many sessions qualify.
 3. **Two-phase paginated queries** — session listings first select only the page's `SessionId`s (with `Skip`/`Take`), run the bulk auto-finish check against just that id set, and only then load the full entities with `Include(s => s.Category)` — so navigation properties are never materialized for rows outside the current page.
+4. **Database-level grouped aggregation** — the date-range summary computes totals and the per-category breakdown via EF Core `GroupBy`/`Sum`/`Count` translated directly into SQL `GROUP BY` aggregation, instead of pulling the range's sessions into memory to aggregate in C#.
 
 ---
 
@@ -102,9 +104,30 @@ Dependency direction: `Api → Infrastructure → Application → Domain`.
 | PATCH  | `/{id}/run`           | Start (from `Pending`) or resume (from `Paused`) a session          |
 | PATCH  | `/{id}/pause`         | Pause a running session, rejected once the pause limit is reached  |
 | PATCH  | `/{id}/finish`        | Finish a session, with an optional closing summary                 |
-| GET    | `/day-summary?date=`  | Aggregated focus time and session list for a given date            |
+| GET    | `/range-date-summary?FromDate=&ToDate=&Pagination.PageNumber=&Pagination.PageSize=` | Aggregated focus time, per-category breakdown, and a paginated session list for a `[FromDate, ToDate]` range |
 
 All protected endpoints require an `Authorization: Bearer <accessToken>` header.
+
+**`GET /api/sessions/range-date-summary` response shape:**
+
+```json
+{
+  "totalFocusMinutes": 0,
+  "totalSessionsCount": 0,
+  "finishedSessionsCount": 0,
+  "categoryDetails": [
+    { "categoryName": "Deep Work", "totalMinutes": 0, "sessionsCount": 0 }
+  ],
+  "sessions": {
+    "items": [],
+    "pageNumber": 1,
+    "pageSize": 10,
+    "totalCount": 0
+  }
+}
+```
+
+Sessions with no category are reported under `"Uncategorized"` in `categoryDetails`.
 
 ---
 
