@@ -13,6 +13,6 @@ namespace TaskManager.Application.Interfaces
         Task DeleteAsync(int sessionId, int userId);
         Task<SessionResponseDto> UpdateAsync(int sessionId, int userId, UpdateSessionDto dto);
         Task<PagedResultDto<SessionResponseDto>> GetUserSessionsAsync(int userId, PaginationParamsDto dto);
-        Task<DaySummaryDto> GetDaySummaryAsync(int userId, DateTime date);
+        Task<RangeSummaryResponseDto> GetDynamicDateRangeSummaryAsync(int userId, RangeSummaryRequestDto dto);
     }
 }

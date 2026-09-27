@@ -75,12 +75,10 @@ namespace TaskManager.Api.Controllers
             return NoContent();
         }
 
-        [HttpGet("day-summary")]
-        public async Task<IActionResult> GetDaySummary([FromQuery] GetDaySummaryQueryDto dto)
+        [HttpGet("range-date-summary")]
+        public async Task<IActionResult> GetDateRangeSummary([FromQuery] RangeSummaryRequestDto dto)
         {
-            var targetDate = dto.Date;
-
-            var summary = await _sessionService.GetDaySummaryAsync(UserId, targetDate);
+            var summary = await _sessionService.GetDynamicDateRangeSummaryAsync(UserId, dto);
             return Ok(summary);
         }
     }

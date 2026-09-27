@@ -16,4 +16,11 @@ namespace TaskManager.Application.DTOs
         public int CategoryId { get; set; }
         public string Name { get; set; } = string.Empty;
     }
+
+    public class CategorySummaryDto
+    {
+        public string CategoryName { get; set; } = string.Empty;
+        public int TotalMinutes { get; set; }
+        public int SessionsCount { get; set; }
+    }
 }

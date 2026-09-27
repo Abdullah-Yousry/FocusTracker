@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using TaskManager.Application.DTOs.TaskManager.Application.DTOs;
 using TaskManager.Domain.Enums;
 
 namespace TaskManager.Application.DTOs
@@ -24,12 +25,30 @@ namespace TaskManager.Application.DTOs
         public Status Status { get; set; }
         public int PausedCount { get; set; }
         public int FocusTimeInMinutes { get; set; }
-        public DateTime CreateAt { get; set; }
+        public DateTime CreatedAt { get; set; }
         public DateTime? StartedAt { get; set; }
         public DateTime? EndedAt { get; set; }
         public DateTime? LastStatusChangedAt { get; set; }
         public int MaxAllowedPauseInMinutes { get; set; } = 60;
         public int TotalPausedInMinutes { get; set; }
+    }
+    public class RangeSummaryResponseDto
+    {
+        public int TotalFocusMinutes { get; set; }
+        public int TotalSessionsCount { get; set; }
+        public int FinishedSessionsCount { get; set; }
+
+        public List<CategorySummaryDto> CategoryDetails {  get; set; } = new ();
+
+        public PagedResultDto<SessionResponseDto> Sessions { get; set; } = new();
+    }
+
+    public class RangeSummaryRequestDto
+    {
+        public DateTime FromDate { get; set; }
+        public DateTime ToDate { get; set; }
+
+        public PaginationParamsDto Pagination { get; set; } = new();
     }
 
     public class DaySummaryDto

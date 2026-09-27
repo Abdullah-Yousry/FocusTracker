@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,6 +13,7 @@ using TaskManager.Application.Interfaces;
 using TaskManager.Domain.Entities;
 using TaskManager.Domain.Enums;
 using TaskManager.Infrastructure.Data;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace TaskManager.Infrastructure.Services
 {
@@ -161,34 +163,72 @@ namespace TaskManager.Infrastructure.Services
             return MapToDto(session);
         }
 
-        public async Task<DaySummaryDto> GetDaySummaryAsync(int userId, DateTime date)
+        public async Task<RangeSummaryResponseDto> GetDynamicDateRangeSummaryAsync(int userId, RangeSummaryRequestDto dto)
         {
-            var targetDate = date.Date;
-            var nextTargetDate = targetDate.AddDays(1);
+            // [startDate, endDate[
+            var startDate = dto.FromDate.Date;
+            var endDate = dto.ToDate.Date.AddDays(1);
 
-            var requiredSessionsIds = await _context.Sessions
+            var baseQuery = _context.Sessions
                 .AsNoTracking()
-                .Where(s => s.UserId == userId && s.StartedAt.HasValue && s.StartedAt.Value >= targetDate && s.StartedAt.Value < nextTargetDate)
-                .Select(s => s.SessionId)
+                .Where(s => 
+                    s.UserId == userId 
+                    && s.CreatedAt >= startDate && s.CreatedAt < endDate);
+
+            await BulkUpdateForExpiredSessionsAsync(baseQuery);
+
+            var now = DateTime.UtcNow;
+
+            var basicInformations = await baseQuery
+                .GroupBy(s => 1)
+                .Select(g => new
+                {
+                    TotalFocusMinutes = g.Sum(s => s.FocusTimeInMinutes 
+                        + (s.Status == Status.Running ? EF.Functions.DateDiffMinute(s.LastStatusChangedAt, now) : 0)),
+                    TotalSessionsCount = g.Count(),
+                    FinishedSessionsCount = g.Count(s => s.Status == Status.Finished)
+                })
+                .FirstOrDefaultAsync();
+            var totalFocusMinutes = basicInformations?.TotalFocusMinutes ?? 0;
+            var totalSessionsCount = basicInformations?.TotalSessionsCount ?? 0;
+            var finishedSessionsCount = basicInformations?.FinishedSessionsCount ?? 0;
+
+                
+            var categoryDetails = await baseQuery
+                .GroupBy(s => s.Category != null ? s.Category.Name : "Uncategorized")
+                .Select(g => new CategorySummaryDto
+                {
+                    CategoryName = g.Key,
+                    TotalMinutes = g.Sum(s => s.FocusTimeInMinutes
+                        + (s.Status == Status.Running ? EF.Functions.DateDiffMinute(s.LastStatusChangedAt, now) : 0)),
+                    SessionsCount = g.Count()
+                })
                 .ToListAsync();
 
-            await BulkUpdate(requiredSessionsIds);
-
-            var sessions = await _context.Sessions
-                .AsNoTracking()
+            var sessionPage = await baseQuery
                 .Include(s => s.Category)
-                .Where(s => requiredSessionsIds.Contains(s.SessionId))
-                .OrderBy(s => s.CreatedAt)
+                .OrderByDescending(s => s.CreatedAt)
+                .Skip((dto.Pagination.PageNumber - 1) * dto.Pagination.PageSize)
+                .Take(dto.Pagination.PageSize)
                 .ToListAsync();
 
-            var sessionDtos = sessions.Select(MapToDto).ToList();
-            var totalMinutes = sessionDtos.Sum(s => s.FocusTimeInMinutes);
+            var sessionPageDto = sessionPage.Select(MapToDto).ToList();
 
-            return new DaySummaryDto
+            return new RangeSummaryResponseDto
             {
-                Date = targetDate,
-                TotalMinutes = totalMinutes,
-                Sessions = sessionDtos
+                TotalFocusMinutes = totalFocusMinutes,
+                TotalSessionsCount = totalSessionsCount,
+                FinishedSessionsCount = finishedSessionsCount,
+
+                CategoryDetails = categoryDetails,
+
+                Sessions = new PagedResultDto<SessionResponseDto>
+                {
+                    Items = sessionPageDto,
+                    PageNumber = dto.Pagination.PageNumber,
+                    PageSize = dto.Pagination.PageSize,
+                    TotalCount = totalSessionsCount
+                }
             };
         }
 
@@ -205,7 +245,9 @@ namespace TaskManager.Infrastructure.Services
                 .Select(s => s.SessionId)
                 .ToListAsync();
 
-            await BulkUpdate(requiredSessionsIds);
+            var pageQuery = baseQuery
+                .Where(s => requiredSessionsIds.Contains(s.SessionId));
+            await BulkUpdateForExpiredSessionsAsync(pageQuery);
 
                 var sessions = await _context.Sessions
                     .AsNoTracking()
@@ -243,7 +285,7 @@ namespace TaskManager.Infrastructure.Services
                 CategoryId = session.CategoryId,
                 Status = session.Status,
                 FocusTimeInMinutes = currentTotalTime,
-                CreateAt = session.CreatedAt,
+                CreatedAt = session.CreatedAt,
                 LastStatusChangedAt = session.LastStatusChangedAt,
                 PausedCount = session.PauseCount,
                 CategoryName = session.Category?.Name ?? string.Empty,
@@ -317,17 +359,17 @@ namespace TaskManager.Infrastructure.Services
 
             return (status, totalPausedInMinutes, lastStatusChangedAt, endedAt, summary);
         }
-        private async Task BulkUpdate(List<int> ids)
+
+        private async Task BulkUpdateForExpiredSessionsAsync(IQueryable<Session> query)
         {
-            if (ids == null || !ids.Any())
+            if (query == null)
                 return;
 
             var now = DateTime.UtcNow;
 
-            int autoFinishedCount = await _context.Sessions
+            int autoFinishedCount = await query
                 .Where(s =>
                     s.Status == Status.Paused
-                    && ids.Contains(s.SessionId)
                     && EF.Functions.DateDiffMinute(s.LastStatusChangedAt, now) + s.TotalPausedInMinutes > s.MaxAllowedPauseInMinutes)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(x => x.Status, Status.Finished)
@@ -339,8 +381,9 @@ namespace TaskManager.Infrastructure.Services
                         : x.Summary + " (Auto-finished due to extended pause duration).")
                 );
 
-            if(autoFinishedCount > 0)
+            if (autoFinishedCount > 0)
                 _logger.LogInformation("BulkUpdate: Auto-finished {Count} sessions due to extended pause duration.", autoFinishedCount);
         }
+
     }
 }
